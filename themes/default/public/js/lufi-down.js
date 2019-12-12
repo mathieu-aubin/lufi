@@ -81,9 +81,12 @@ function spawnWebsocket(pa) {
         } else {
             console.log('Getting slice '+(data.part + 1)+' of '+data.total);
             var slice   = JSON.parse(res.shift());
-            var percent = Math.round(100 * (data.part + 1)/data.total);
+            var percent = Math.round(1000 * (data.part + 1)/data.total)/10;
+            var wClass  = percent.toString().replace('.', '-');
             var pb      = $('#pb');
-            pb.css('width', percent+'%');
+            pb.removeClass();
+            pb.addClass('determinate');
+            pb.addClass('width-'+wClass);
             pb.attr('aria-valuenow', percent);
             $('#pbt').html(percent+'%');
             try {
@@ -106,6 +109,7 @@ function spawnWebsocket(pa) {
                     }
                     var innerHTML = ['<p><a href="', blobURL, '" class="btn btn-primary" download="', escapeHtml(data.name), '">', i18n.download, '</a></p>'];
 
+                    var isZip = ($('#filesize').attr('data-zipped') === 'true');
                     if (data.type.match(/^image\//) !== null) {
                         innerHTML.push('<img id="render-image" class="responsive-img" alt="', escapeHtml(data.name), '" src="', blobURL, '">');
                     } else if (data.type.match(/^video\//) !== null) {
@@ -116,9 +120,45 @@ function spawnWebsocket(pa) {
                         innerHTML.push('<audio class="responsive-video" controls>',
                                            '<source src="', blobURL, '" type="', data.type, '">',
                                        '</audio>');
+                    } else if (isZip) {
+                        innerHTML.push('<p><a class="btn btn-primary" id="showZipContent">', i18n.showZipContent, '</a></p>');
                     }
+
                     pbd.html(innerHTML.join(''));
 
+                    if (isZip) {
+                        $('#showZipContent').click(function() {
+                            JSZip.loadAsync(blob)
+                            .then(function (zip) {
+                                var innerHTML = ['<h3>', i18n.zipContent, '</h3><ul>'];
+                                zip.forEach(function (relativePath, zipEntry) {
+                                    innerHTML.push(
+                                        '<li>',
+                                            zipEntry.name,
+                                            ' (', filesize(zipEntry._data.uncompressedSize, {base: 10}), ') ',
+                                            '<a href="#" download="', zipEntry.name, '" class="download-zip-content" title="', i18n.download, '">',
+                                                '<i class="mdi-file-file-download"></i>',
+                                            '</a>',
+                                        '</li>'
+                                    );
+                                });
+                                innerHTML.push('</ul>');
+                                pbd.append(innerHTML.join(''));
+                                $('.download-zip-content').click(function(e) {
+                                    e.preventDefault();
+                                    var t = $(this);
+                                    var filename = t.attr('download');
+                                    zip.files[filename].async('blob').then(function(blob) {
+                                        t.unbind('click');
+                                        t.attr('href', URL.createObjectURL(blob));
+                                        t[0].click();
+                                    });
+                                })
+                                $('#showZipContent').hide();
+                                $('#showZipContent').unbind('click');
+                            });
+                        });
+                    }
                     if ($('#file_pwd').length === 1) {
                         window.ws.send('{"ended":true, "file_pwd": "'+$('#file_pwd').val()+'"}');
                     } else {
@@ -173,8 +213,12 @@ $(document).ready(function(){
         window.ws.onclose = function() {};
         window.ws.close();
         $('#please-wait, #loading, #pbd, #abort').remove();
-        $('#filesize').parent().append('<h4>'+i18n.aborted1+'</h4><a onClick="window.location.reload();" class="waves-effect waves-light btn">'+i18n.aborted2+'</a></p>');
+        $('#filesize').parent().append('<h4>'+i18n.aborted1+'</h4><a id="reloadLocation" class="waves-effect waves-light btn">'+i18n.aborted2+'</a></p>');
         window.onbeforeunload = null;
+        $('#reloadLocation').on('click', function(e) {
+            e.preventDefault();
+            window.location.reload();
+        })
     });
     $('#filesize').html(filesize($('#filesize').attr('data-filesize'), {base: 10}));
     window.a         = new Array();

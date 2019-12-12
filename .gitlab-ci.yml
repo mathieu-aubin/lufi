@@ -1,0 +1,150 @@
+image: hatsoftwares/lufi-test-ci:buster
+stages:
+  - publish_changelog
+  - pouet_it
+  - carton
+  - carton_bdd
+  - tests
+variables:
+  POSTGRES_DB: lufi_db
+  POSTGRES_USER: lufi
+  POSTGRES_PASSWORD: lufi_pwd
+  MYSQL_DATABASE: lufi_db
+  MYSQL_USER: lufi
+  MYSQL_PASSWORD: lufi_pwd
+  MYSQL_ROOT_PASSWORD: root
+
+### Jobs templates
+##
+#
+.retry: &retry
+  retry: 2
+  except:
+    - tags
+.carton_bdd_template: &carton_bdd_definition
+  <<: *retry
+  stage: carton_bdd
+  cache:
+    key: "$CI_COMMIT_REF_NAME"
+    paths:
+      - local/
+    policy: pull
+  artifacts:
+    paths:
+      - local.tar
+    expire_in: 3 hours
+  needs:
+    - carton
+  after_script:
+    - tar cf local.tar local/
+
+.tests_template: &tests_template
+  <<: *retry
+  stage: tests
+  coverage: '/Total.* (\d+\.\d+)$/'
+  before_script:
+    - tar xf local.tar && rm local.tar
+    - which mariadb_config && cd $(dirname $(which mariadb_config)) && ln -s mariadb_config mysql_config
+    - cd $CI_PROJECT_DIR
+    - pwd
+  script:
+    - MOJO_CONFIG="t/${CI_JOB_NAME}.conf" make test
+    - MOJO_CONFIG="t/${CI_JOB_NAME}.conf" make cover
+
+.sqlite_template: &sqlite_definition
+  <<: *tests_template
+  needs:
+    - carton_sqlite
+  services:
+    - name: rroemhild/test-openldap
+      alias: rroemhild-test-openldap
+.pg_template: &pg_definition
+  <<: *tests_template
+  needs:
+    - carton_postgresql
+  services:
+    - name: postgres:11
+      alias: postgres
+    - name: rroemhild/test-openldap
+      alias: rroemhild-test-openldap
+.mysql_template: &mysql_definition
+  <<: *tests_template
+  needs:
+    - carton_mysql
+  services:
+    - name: mariadb:10.3
+      alias: mariadb
+    - name: rroemhild/test-openldap
+      alias: rroemhild-test-openldap
+
+### Publish tag changelog and create a toot
+##
+#
+include:
+  - 'https://framagit.org/fiat-tux/gitlabci-snippets/raw/4e4e03322e95e9b0124c714456ebf1bdc02ad43f/publish_changelog.gitlab-ci.yml'
+  - 'https://framagit.org/fiat-tux/gitlabci-snippets/raw/4e4e03322e95e9b0124c714456ebf1bdc02ad43f/pouet-it-from-ci.gitlab-ci.yml'
+
+### Podcheck
+##
+#
+podcheck:
+  stage: carton
+  script:
+    - make podcheck
+  except:
+    - tags
+
+### Cpanfile.snapshot
+## Used to get a cpanfile.snapshot from a fresh server (not like my dev VM)
+#
+#cpanfile_snapshot:
+#  stage: carton
+#  script:
+#    - rm cpanfile.snapshot
+#    - which mariadb_config && cd $(dirname $(which mariadb_config)) && ln -s mariadb_config mysql_config
+#    - carton install
+#    - cat cpanfile.snapshot
+#  except:
+#    - tags
+
+### Install common dependencies
+##
+#
+carton:
+  <<: *retry
+  stage: carton
+  cache:
+    key: "$CI_COMMIT_REF_NAME"
+    paths:
+      - local/
+  script:
+    - carton install --deployment --without=sqlite --without=postgresql --without=mysql
+
+### Install DB related dependencies
+##
+#
+carton_sqlite:
+  <<: *carton_bdd_definition
+  script:
+    - carton install --deployment --without=postgresql --without=mysql
+carton_postgresql:
+  <<: *carton_bdd_definition
+  script:
+    - carton install --deployment --without=sqlite --without=mysql
+carton_mysql:
+  <<: *carton_bdd_definition
+  before_script:
+    - which mariadb_config && cd $(dirname $(which mariadb_config)) && ln -s mariadb_config mysql_config
+    - cd $CI_PROJECT_DIR
+  script:
+    - carton install --deployment --without=sqlite --without=postgresql
+
+### Tests
+##
+#
+sqlite:
+  <<: *sqlite_definition
+postgresql:
+  <<: *pg_definition
+mysql:
+  <<: *mysql_definition
